@@ -17,13 +17,13 @@ resource "tls_private_key" "keypairos" {
 
 resource "local_file" "keypairos2" {
     content     = tls_private_key.keypairos.private_key_pem
-    filename = "os.pem"  
+    filename = "keypair2011.pem"  
     file_permission = 0400	
 }
 
 
 resource "aws_key_pair" "deployer" {
-  key_name   = "os"
+  key_name   = "keypairdev"
   public_key = tls_private_key.keypairos.public_key_openssh
 }
 
@@ -68,7 +68,17 @@ ingress {
     Name = "websecuritygroup"
   }
 }
+resource "aws_subnet" "subnet_public1"{
+     vpc_id = aws_vpc.default.id
+     map_public_ip_on_launch = "true"
+     availability_zone = "ap-south-1a"
+     cidr_block = "10.0.0.0/24"
 
+
+     tags = {
+         Name = "Public VPC Subnet"
+     }
+ }
 #CREATING AN EC2 INSTANCE WITH ALL ABOVE ABBREVIATIONS USED
 
 resource "aws_instance" "myoperatingsys" {
@@ -100,48 +110,30 @@ resource "aws_instance" "myoperatingsys" {
 
 }
 
-#CREATING AN EBS VOLUME
+resource "aws_efs_file_system" "efsmyos" {
+  creation_token = "firstefs"
 
-resource "aws_ebs_volume" "volume1" {
-  availability_zone = aws_instance.myoperatingsys.availability_zone
-  size              = 1
   tags = {
-     Name = "Volume1"
-       }
-}
-
-#ATTACHING IT TO EC2 INSTANCES
-
-resource "aws_volume_attachment" "ebsattach" {
-  device_name = "/dev/sdd"
-  volume_id   = aws_ebs_volume.volume1.id
-  instance_id = aws_instance.myoperatingsys.id
-}
-
-#COPY THE CONTENT OF GITHUB RESPIRATORY TO /var/www/html/
-
-resource "null_resource" "nullremote3" {
-  
-   depends_on = [
-    aws_volume_attachment.ebsattach,
-  ]
-
-   connection {
-    type     = "ssh"
-    user     = "ec2-user"
-    private_key = tls_private_key.keypairos.private_key_pem
-    host     = aws_instance.myoperatingsys.public_ip
+    Name = "EFS_OS"
   }
+}
+
+resource "aws_efs_mount_target" "alpha" {
+  file_system_id = aws_efs_file_system.efsmyos.id
+  subnet_id      = aws_subnet.subnet_public1.id
+}
 
 
-provisioner "remote-exec" {
+resource "null_resource"  "nullres" {
+            provisioner "remote-exec" {
     inline = [
-      "sudo mkfs.ext4 /dev/xvdh ",
-      "sudo mount /dev/xvdh  /var/www/html",
-      "sudo rm -rf /var/www/html/*",
-      "sudo git clone https://github.com/DevendraJohari24/multicloud.git   /var/www/html",
+         "sudo yum -y install nfs-utils",
+         "sudo mount -t nfs -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport ${aws_efs_file_system.efsmyos.id}:/   /var/www/html",
+        "sudo su -c \"echo '${aws_efs_file_system.efsmyos.id}:/ /var/www/html nfs4 defaults,vers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport 0 0' >> /etc/fstab\""
+     
     ]
-  }
+ 
+ }
 }
 
 
@@ -157,6 +149,11 @@ resource "aws_s3_bucket" "s3_bucketos" {
           private_key = tls_private_key.keypairos.private_key_pem
           host     = aws_instance.myoperatingsys.public_ip
          }
+
+    provisioner "local-exec" {
+    command =  "sudo git clone https://github.com/DevendraJohari24/multicloud.git   terra",
+    
+  }
 	
   	tags = {
    	Name        = "My-S3-bucket"
@@ -225,7 +222,18 @@ resource "aws_cloudfront_distribution" "s3_distribution" {
   viewer_certificate {
     cloudfront_default_certificate = true
   }
+  depends_on = [
+    aws_s3_bucket.s3_bucketos
+  ]
 }
+
+provisioner "remote-exec" {
+    inline = [
+      "sudo bash -c 'echo export url=${aws_s3_bucket.s3_bucketos.bucket_domain_name} >> /etc/apache2/envvars'",
+      "sudo sysytemctl restart apache2"
+    ]
+  }
+
 
 #OUTPUT IP SHOWN IN COMMAND PROMPT
 output "myos_ip" {
@@ -247,6 +255,4 @@ resource "null_resource" "nulllocal0608"  {
 	    command = "start chrome  ${aws_instance.myoperatingsys.public_ip}"
   	}
 }
-
-
 
